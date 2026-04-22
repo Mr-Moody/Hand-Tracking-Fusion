@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from camera import CameraSource
 from fusion import HandFusion
 from hand_detector import HandDetector
+from plot3d import Hand3DPlot
 from visualiser import HandVisualiser
 
 DEFAULT_MODEL = Path(__file__).parent / "models" / "hand_landmarker.task"
@@ -49,6 +50,7 @@ def main():
 
     fusion = HandFusion(fps=args.fps)
     vis = HandVisualiser()
+    plot3d = Hand3DPlot()
 
     print(f"Camera 0: index {args.cam0}")
     if cam1:
@@ -99,6 +101,8 @@ def main():
             else:
                 display = frame0
 
+            plot3d.update(fused_pts)
+
             cv2.imshow("Hand Tracking Fusion", display)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
@@ -110,6 +114,7 @@ def main():
         det0.close()
         if det1 is not None:
             det1.close()
+        plot3d.close()
         cv2.destroyAllWindows()
 
 
