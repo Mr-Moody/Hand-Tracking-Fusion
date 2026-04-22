@@ -12,7 +12,8 @@ from hand_detector import HandDetector
 from plot3d import Hand3DPlot
 from visualiser import HandVisualiser
 
-DEFAULT_MODEL = Path(__file__).parent / "models" / "hand_landmarker.task"
+DEFAULT_MODEL   = Path(__file__).parent / "models" / "hand_landmarker.task"
+DEFAULT_CAL     = Path(__file__).parent / "calibration" / "stereo_cal.json"
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,7 +28,21 @@ def parse_args() -> argparse.Namespace:
                    help="Target capture/EKF frame rate (default: 30)")
     p.add_argument("--show-both", action="store_true",
                    help="Show both camera feeds side by side when --cam1 is set")
+    p.add_argument("--calibrate", action="store_true",
+                   help="Run interactive stereo calibration before starting "
+                        "(requires --cam1; saves to calibration/stereo_cal.json)")
+    p.add_argument("--cal-path", type=Path, default=DEFAULT_CAL, metavar="PATH",
+                   help=f"Stereo calibration file (default: {DEFAULT_CAL})")
     return p.parse_args()
+
+
+def run_calibration(args: argparse.Namespace) -> None:
+    from calibration.calibration import run_stereo_calibration, save_calibration
+    if args.cam1 is None:
+        print("--calibrate requires --cam1 to be set.")
+        sys.exit(1)
+    data = run_stereo_calibration(args.cam0, args.cam1)
+    save_calibration(args.cal_path, data)
 
 
 def main():
@@ -42,13 +57,27 @@ def main():
         )
         sys.exit(1)
 
+    if args.calibrate:
+        run_calibration(args)
+
+    # Load stereo calibration if available
+    calibration = None
+    if args.cam1 is not None:
+        from calibration.calibration import load_calibration
+        calibration = load_calibration(args.cal_path)
+        if calibration is not None:
+            print(f"Stereo calibration loaded from {args.cal_path} — using triangulation")
+        else:
+            print("No stereo calibration found — using MediaPipe monocular 3D "
+                  f"(run with --calibrate to improve rotation tracking)")
+
     cam0 = CameraSource(args.cam0)
     cam1 = CameraSource(args.cam1) if args.cam1 is not None else None
 
     det0 = HandDetector(args.model, fps=args.fps)
     det1 = HandDetector(args.model, fps=args.fps) if cam1 is not None else None
 
-    fusion = HandFusion(fps=args.fps)
+    fusion = HandFusion(fps=args.fps, calibration=calibration)
     vis = HandVisualiser()
     plot3d = Hand3DPlot()
 
@@ -75,7 +104,6 @@ def main():
 
             fused_pts = fusion.update([detection0, detection1] if cam1 else [detection0])
 
-            # Annotate primary feed
             if detection0 is not None:
                 vis.draw_detection(frame0, detection0)
                 vis.draw_bounding_box(frame0, detection0)
@@ -88,7 +116,6 @@ def main():
                 hud.append(f"Wrist 3D: ({w[0]:.3f}, {w[1]:.3f}, {w[2]:.3f}) m")
             vis.draw_hud(frame0, hud)
 
-            # Build display frame
             if args.show_both and frame1 is not None:
                 if detection1 is not None:
                     vis.draw_detection(frame1, detection1)
