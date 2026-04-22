@@ -12,8 +12,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-BOARD_SIZE = (9, 6)   # interior corner count (columns, rows)
-SQUARE_M   = 0.025    # checkerboard square side in metres (25 mm)
+BOARD_SIZE = (7, 7)   # interior corner count (columns, rows)
+SQUARE_M   = 0.050    # checkerboard square side in metres (25 mm)
 
 
 # ---------------------------------------------------------------------------
@@ -44,21 +44,54 @@ def run_stereo_calibration(cam0_idx: int, cam1_idx: int,
     cap0 = cv2.VideoCapture(cam0_idx)
     cap1 = cv2.VideoCapture(cam1_idx)
 
+    if not cap0.isOpened() or not cap1.isOpened():
+        cap0.release()
+        cap1.release()
+        raise RuntimeError(
+            f"Could not open calibration cameras cam0={cam0_idx}, cam1={cam1_idx}."
+        )
+
+    # Warm up camera streams to avoid initial black/empty frames.
+    for _ in range(20):
+        cap0.read()
+        cap1.read()
+
     obj_pt = _object_points()
     obj_pts: list = []
     img_pts0: list = []
     img_pts1: list = []
     img_size = None
 
-    print(f"Checkerboard: {BOARD_SIZE[0]}×{BOARD_SIZE[1]} inner corners, "
-          f"{SQUARE_M * 100:.0f} mm squares")
+    print(f"Checkerboard: {BOARD_SIZE[0]}x{BOARD_SIZE[1]} inner corners, "
+          f"{SQUARE_M * 1000:.0f} mm squares")
     print("SPACE = capture pair, Q = finish")
 
+    end_reason = "completed requested captures"
+    status_msg = "Press SPACE when READY"
+
+    read_failures = 0
     while True:
         ok0, f0 = cap0.read()
         ok1, f1 = cap1.read()
         if not ok0 or not ok1:
-            break
+            read_failures += 1
+            if read_failures == 1 or read_failures % 30 == 0:
+                print(
+                    f"Read failure during calibration (cam0_ok={ok0}, cam1_ok={ok1}). "
+                    "Retrying..."
+                )
+            if read_failures > 120:
+                raise RuntimeError(
+                    "Too many camera read failures during calibration. "
+                    "Check camera indices, permissions, or if another app is using the devices."
+                )
+            continue
+        read_failures = 0
+
+        # Mirror to match CameraSource so calibration matrices are consistent
+        # with the flipped frames used during hand tracking.
+        f0 = cv2.flip(f0, 1)
+        f1 = cv2.flip(f1, 1)
 
         g0 = cv2.cvtColor(f0, cv2.COLOR_BGR2GRAY)
         g1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
@@ -70,23 +103,37 @@ def run_stereo_calibration(cam0_idx: int, cam1_idx: int,
         cv2.drawChessboardCorners(disp1, BOARD_SIZE, c1, found1)
         ready = found0 and found1
         colour = (0, 255, 0) if ready else (0, 0, 255)
-        label = "READY" if ready else "searching…"
-        cv2.putText(disp0, f"{label}   {len(obj_pts)}/{n_pairs}",
+        label = "READY" if ready else "searching..."
+        cv2.putText(disp0, f"{label}   captured: {len(obj_pts)}/{n_pairs}",
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, colour, 2)
-        cv2.imshow("Calibration — cam0", disp0)
-        cv2.imshow("Calibration — cam1", disp1)
+        cv2.putText(disp0, status_msg,
+                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.imshow("Calibration cam0", disp0)
+        cv2.imshow("Calibration cam1", disp1)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
+            end_reason = "user pressed q"
+            print("[CAL] User pressed Q - finishing capture loop.")
             break
-        if key == ord(' ') and ready:
-            img_pts0.append(cv2.cornerSubPix(g0, c0, (11, 11), (-1, -1), _SUBPIX_CRIT))
-            img_pts1.append(cv2.cornerSubPix(g1, c1, (11, 11), (-1, -1), _SUBPIX_CRIT))
-            obj_pts.append(obj_pt)
-            img_size = g0.shape[::-1]
-            print(f"  Captured {len(obj_pts)}/{n_pairs}")
-            if len(obj_pts) >= n_pairs:
-                break
+        if key == ord(' '):
+            if ready:
+                img_pts0.append(cv2.cornerSubPix(g0, c0, (11, 11), (-1, -1), _SUBPIX_CRIT))
+                img_pts1.append(cv2.cornerSubPix(g1, c1, (11, 11), (-1, -1), _SUBPIX_CRIT))
+                obj_pts.append(obj_pt)
+                img_size = g0.shape[::-1]
+                status_msg = f"Captured pair {len(obj_pts)}/{n_pairs}"
+                print(f"[CAL] SPACE pressed -> captured pair {len(obj_pts)}/{n_pairs}")
+                if len(obj_pts) >= n_pairs:
+                    end_reason = "reached requested capture count"
+                    print("[CAL] Requested number of pairs reached.")
+                    break
+            else:
+                status_msg = "SPACE ignored - checkerboard not found in both cameras"
+                print(
+                    f"[CAL] SPACE pressed -> skipped (checkerboard missing in one/both views). "
+                    f"Captured remains {len(obj_pts)}/{n_pairs}."
+                )
 
     cap0.release()
     cap1.release()
@@ -94,10 +141,11 @@ def run_stereo_calibration(cam0_idx: int, cam1_idx: int,
 
     if len(obj_pts) < 5:
         raise RuntimeError(
-            f"Only {len(obj_pts)} pairs captured — need at least 5."
+            f"Calibration failed: only {len(obj_pts)} valid pairs captured (need at least 5). "
+            f"Reason: {end_reason}."
         )
 
-    print("Running calibration…")
+    print("Running calibration...")
     _, K0, d0, _, _ = cv2.calibrateCamera(obj_pts, img_pts0, img_size, None, None)
     _, K1, d1, _, _ = cv2.calibrateCamera(obj_pts, img_pts1, img_size, None, None)
 
@@ -173,4 +221,8 @@ def triangulate_landmarks(
     pts4d  = cv2.triangulatePoints(P0, P1, u0.T, u1.T)
     pts3d  = (pts4d[:3] / pts4d[3]).T.astype(np.float32)
     pts3d -= pts3d[0]   # wrist-centre (landmark 0)
-    return pts3d
+    pts3d[:, 0] *= -1   # negate x to undo horizontal flip (match world-landmark convention)
+
+    pixel_scale_pts = pts3d * 4000 
+    
+    return pixel_scale_pts

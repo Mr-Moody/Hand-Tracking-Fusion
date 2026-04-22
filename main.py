@@ -41,8 +41,12 @@ def run_calibration(args: argparse.Namespace) -> None:
     if args.cam1 is None:
         print("--calibrate requires --cam1 to be set.")
         sys.exit(1)
-    data = run_stereo_calibration(args.cam0, args.cam1)
-    save_calibration(args.cal_path, data)
+    try:
+        data = run_stereo_calibration(args.cam0, args.cam1)
+        save_calibration(args.cal_path, data)
+    except Exception as exc:
+        print(f"[CAL] Calibration failed: {exc}")
+        raise
 
 
 def main():
