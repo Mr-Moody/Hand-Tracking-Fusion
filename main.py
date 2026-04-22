@@ -1,122 +1,117 @@
-import time
-
-import cv2
-import mediapipe as mp
-from mediapipe.tasks import python as mp_python
-from mediapipe.tasks.python import vision
+import argparse
+import sys
 from pathlib import Path
 
-DIRECTORY_PATH = Path(__file__).parent
+import cv2
 
-# Download the model once with:
-#   wget https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
-MODEL_PATH =  DIRECTORY_PATH / "models" / "hand_landmarker.task"
+sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-# Hand connection pairs
-HAND_CONNECTIONS = [
-    (0, 1), (1, 2), (2, 3), (3, 4), # Thumb
-    (0, 5), (5, 6), (6, 7), (7, 8), # Index
-    (0, 9), (9, 10), (10, 11), (11, 12), # Middle
-    (0, 13), (13, 14), (14, 15), (15, 16), # Ring
-    (0, 17), (17, 18), (18, 19), (19, 20), # Pinky
-    (5, 9), (9, 13), (13, 17), # Palm knuckles
-]
+from camera import CameraSource
+from fusion import HandFusion
+from hand_detector import HandDetector
+from visualiser import HandVisualiser
 
-LANDMARK_COLOR = (0, 220, 255)
-CONNECTION_COLOR = (255, 255, 255)
-BOX_COLOR = (0, 255, 0)
+DEFAULT_MODEL = Path(__file__).parent / "models" / "hand_landmarker.task"
 
 
-def draw_hand(frame, hand_landmarks):
-    """Draw skeleton and landmark dots for one hand."""
-    h, w, _ = frame.shape
-
-    # Pixel coords for every landmark
-    pts = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
-
-    # Connections
-    for a, b in HAND_CONNECTIONS:
-        cv2.line(frame, pts[a], pts[b], CONNECTION_COLOR, 2, cv2.LINE_AA)
-
-    # Dots
-    for x, y in pts:
-        cv2.circle(frame, (x, y), 5, LANDMARK_COLOR, -1)
-        cv2.circle(frame, (x, y), 5, (0, 0, 0), 1)   # thin black outline
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Multi-camera 3D hand tracking with EKF fusion")
+    p.add_argument("--cam0", type=int, default=0, metavar="INDEX",
+                   help="Primary camera index (default: 0)")
+    p.add_argument("--cam1", type=int, default=None, metavar="INDEX",
+                   help="Secondary camera index for multi-view fusion (optional)")
+    p.add_argument("--model", type=Path, default=DEFAULT_MODEL, metavar="PATH",
+                   help="Path to hand_landmarker.task model")
+    p.add_argument("--fps", type=float, default=30.0,
+                   help="Target capture/EKF frame rate (default: 30)")
+    p.add_argument("--show-both", action="store_true",
+                   help="Show both camera feeds side by side when --cam1 is set")
+    return p.parse_args()
 
 
-# MediaPipe Tasks API setup
-BaseOptions = mp_python.BaseOptions
-HandLandmarker = vision.HandLandmarker
-HandLandmarkerOptions = vision.HandLandmarkerOptions
-VisionRunningMode = vision.RunningMode
+def main():
+    args = parse_args()
 
-
-options = HandLandmarkerOptions(
-    base_options=BaseOptions(model_asset_path=str(MODEL_PATH)),
-    running_mode=VisionRunningMode.VIDEO,
-    num_hands=2,
-    min_hand_detection_confidence=0.7,
-    min_hand_presence_confidence=0.5,
-    min_tracking_confidence=0.5,
-)
-
-capture = cv2.VideoCapture(0)
-if not capture.isOpened():
-    raise RuntimeError("Could not open camera. Check that it is connected and not in use.")
-
-print("Hand detection running - press Q to quit.")
-
-with HandLandmarker.create_from_options(options) as landmarker:
-    while True:
-        ret, frame = capture.read()
-        if not ret:
-            print("Failed to grab frame.")
-            break
-
-        frame = cv2.flip(frame, 1)
-
-        rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-
-        timestamp_ms = int(time.monotonic() * 1000)
-        result = landmarker.detect_for_video(mp_image, timestamp_ms)
-
-        h, w, _ = frame.shape
-
-        for idx, hand_landmarks in enumerate(result.hand_landmarks):
-            draw_hand(frame, hand_landmarks)
-
-            # Bounding box
-            xs = [lm.x * w for lm in hand_landmarks]
-            ys = [lm.y * h for lm in hand_landmarks]
-            x1, y1 = int(min(xs)) - 10, int(min(ys)) - 10
-            x2, y2 = int(max(xs)) + 10, int(max(ys)) + 10
-            cv2.rectangle(frame, (x1, y1), (x2, y2), BOX_COLOR, 2)
-
-            # Left/Right label
-            if result.handedness:
-                label = result.handedness[idx][0].display_name
-                score = result.handedness[idx][0].score
-                cv2.putText(
-                    frame, f"{label}  {score:.2f}",
-                    (x1, y1 - 8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.75, BOX_COLOR, 2, cv2.LINE_AA,
-                )
-
-        # HUD
-        cv2.putText(
-            frame, f"Hands detected: {len(result.hand_landmarks)}",
-            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA,
+    if not args.model.exists():
+        print(
+            f"Model not found at {args.model}\n"
+            "Download with:\n"
+            "  wget -P models/ https://storage.googleapis.com/mediapipe-models/"
+            "hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
         )
-        cv2.putText(
-            frame, "Press Q to quit",
-            (10, frame.shape[0] - 10),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (180, 180, 180), 1, cv2.LINE_AA,
-        )
+        sys.exit(1)
 
-        cv2.imshow("Hand Detection", frame)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+    cam0 = CameraSource(args.cam0)
+    cam1 = CameraSource(args.cam1) if args.cam1 is not None else None
 
-capture.release()
-cv2.destroyAllWindows()
+    det0 = HandDetector(args.model, fps=args.fps)
+    det1 = HandDetector(args.model, fps=args.fps) if cam1 is not None else None
+
+    fusion = HandFusion(fps=args.fps)
+    vis = HandVisualiser()
+
+    print(f"Camera 0: index {args.cam0}")
+    if cam1:
+        print(f"Camera 1: index {args.cam1}")
+    print("Running — press Q to quit.")
+
+    try:
+        while True:
+            frame0, ts0 = cam0.read()
+            if frame0 is None:
+                print("Camera 0 read failed.")
+                break
+
+            detection0 = det0.detect(frame0, ts0)
+
+            detection1 = None
+            frame1 = None
+            if cam1 is not None:
+                frame1, ts1 = cam1.read()
+                if frame1 is not None:
+                    detection1 = det1.detect(frame1, ts1)
+
+            fused_pts = fusion.update([detection0, detection1] if cam1 else [detection0])
+
+            # Annotate primary feed
+            if detection0 is not None:
+                vis.draw_detection(frame0, detection0)
+                vis.draw_bounding_box(frame0, detection0)
+
+            hud = [f"Cam0: {'detected' if detection0 else 'no hand'}"]
+            if cam1 is not None:
+                hud.append(f"Cam1: {'detected' if detection1 else 'no hand'}")
+            if fused_pts is not None:
+                w = fused_pts[0]
+                hud.append(f"Wrist 3D: ({w[0]:.3f}, {w[1]:.3f}, {w[2]:.3f}) m")
+            vis.draw_hud(frame0, hud)
+
+            # Build display frame
+            if args.show_both and frame1 is not None:
+                if detection1 is not None:
+                    vis.draw_detection(frame1, detection1)
+                    vis.draw_bounding_box(frame1, detection1)
+                h0 = frame0.shape[0]
+                h1, w1 = frame1.shape[:2]
+                if h0 != h1:
+                    frame1 = cv2.resize(frame1, (int(w1 * h0 / h1), h0))
+                display = cv2.hconcat([frame0, frame1])
+            else:
+                display = frame0
+
+            cv2.imshow("Hand Tracking Fusion", display)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+
+    finally:
+        cam0.release()
+        if cam1 is not None:
+            cam1.release()
+        det0.close()
+        if det1 is not None:
+            det1.close()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
