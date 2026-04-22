@@ -49,11 +49,15 @@ class JointHandEKF:
         self.x = self.F @ self.x
         self.P = self.F @ self.P @ self.F.T + self.Q
 
-    def update(self, pts3d: np.ndarray, visible_mask: np.ndarray):
+    def update(self, pts3d: np.ndarray, visible_mask: np.ndarray,
+               depth_noise_scale: float = 1.0):
         """Update with a partial observation.
 
-        pts3d:        (21, 3) — palm-frame positions from one camera
-        visible_mask: (21,)  bool — which joints are reliably observed
+        pts3d:             (21, 3) — palm-frame positions from one camera
+        visible_mask:      (21,)  bool — which joints are reliably observed
+        depth_noise_scale: multiplier on R_z; pass a large value (e.g. 20–50)
+                           when MediaPipe depth is known to be unreliable
+                           (hand face-on to camera).
         """
         vis = np.where(visible_mask)[0]
         if len(vis) == 0:
@@ -62,10 +66,10 @@ class JointHandEKF:
         H = build_partial_H(vis, self.N)
         z = pts3d[vis].flatten()
 
-        # Anisotropic measurement noise: x/y in the palm frame come mostly
-        # from 2D image projections (reliable); z is the palm-normal depth
-        # component (less reliable without stereo triangulation).
-        R_diag = np.tile([2.0, 2.0, 6.0], len(vis))
+        # Anisotropic measurement noise: x/y come from reliable 2-D projections;
+        # z (palm-normal depth) is inherently noisier and can be further scaled
+        # up by the caller when depth quality is low.
+        R_diag = np.tile([2.0, 2.0, 6.0 * depth_noise_scale], len(vis))
         R_meas = np.diag(R_diag)
 
         y = z - H @ self.x

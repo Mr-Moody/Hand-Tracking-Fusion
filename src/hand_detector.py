@@ -45,7 +45,9 @@ class HandDetector():
         lm3d = result.hand_world_landmarks[0]
 
         landmarks_2d = np.array([[lm.x * w, lm.y * h] for lm in lm2d], dtype=np.float32)
-        landmarks_3d = np.array([[lm.x, lm.y, lm.z] for lm in lm3d], dtype=np.float32)
+        # Negate x to undo the horizontal flip applied by CameraSource; without
+        # this the chirality of the 3-D hand is mirrored (right hand looks left).
+        landmarks_3d = np.array([[-lm.x, lm.y, lm.z] for lm in lm3d], dtype=np.float32)
 
         vis_scores = np.array([_visibility(lm) for lm in lm2d])
         # Only threshold if visibility is actually populated; otherwise all visible

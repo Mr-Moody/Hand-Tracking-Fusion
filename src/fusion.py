@@ -10,6 +10,8 @@ from palm_utils import (
     smooth_rotation,
     compute_bone_lengths,
     enforce_bone_lengths,
+    rotation_angle,
+    palm_depth_quality,
 )
 
 import numpy as np
@@ -100,12 +102,31 @@ class HandFusion:
             self._bone_lengths = compute_bone_lengths(palm_obs[0])
             return self._to_world(self._ekf.positions)
 
-        # Smooth palm orientation, predict, update
-        self._R_palm = smooth_rotation(self._R_palm, R_current, alpha=0.4)
+        # Detect large orientation jumps. Any inter-frame rotation > 90° is
+        # physically impossible for a hand at normal speed — it means MediaPipe
+        # has flipped its palm frame estimate.  Re-seeding the EKF is cleaner
+        # than trying to smooth through it (which would produce the squash).
+        angle = rotation_angle(self._R_palm, R_current)
+        if angle > np.pi / 2:
+            self._R_palm = R_current.copy()
+            self._ekf.init(palm_obs[0])
+            if self._bone_lengths is None:
+                self._bone_lengths = compute_bone_lengths(palm_obs[0])
+            return self._to_world(self._ekf.positions)
+
+        # Adaptive rotation smoothing: track fast rotations more aggressively
+        # so the palm frame doesn't lag behind a quickly flipping hand.
+        adaptive_alpha = min(0.85, 0.15 + angle / (np.pi / 4) * 0.15)
+        self._R_palm = smooth_rotation(self._R_palm, R_current, alpha=adaptive_alpha)
 
         self._ekf.predict()
         for pts_palm, mask in zip(palm_obs, mask_list):
-            self._ekf.update(pts_palm, mask)
+            # Scale up depth noise when MediaPipe's z estimate is unreliable
+            # (hand flat-on to the camera).  The EKF then relies on its motion
+            # model for depth and only trusts x/y from the observation.
+            quality = palm_depth_quality(pts_palm)
+            depth_noise_scale = float(np.exp(3.0 * (1.0 - quality)))  # 1x→20x
+            self._ekf.update(pts_palm, mask, depth_noise_scale=depth_noise_scale)
 
         # Enforce bone lengths, write corrections back into EKF state
         positions = self._ekf.positions
