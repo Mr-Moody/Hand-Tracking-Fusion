@@ -119,6 +119,53 @@ def smooth_rotation(R_prev: np.ndarray, R_new: np.ndarray,
     return R_s
 
 
+def get_angle(v1: np.ndarray, v2: np.ndarray) -> float:
+    """Angle in degrees between two 3D vectors."""
+    u1 = v1 / (np.linalg.norm(v1) + 1e-8)
+    u2 = v2 / (np.linalg.norm(v2) + 1e-8)
+    return float(np.degrees(np.arccos(np.clip(np.dot(u1, u2), -1.0, 1.0))))
+
+
+def convert_to_12dof_hand(landmarks: np.ndarray) -> dict[str, float]:
+    """Convert (21,3) MediaPipe landmarks to XHand1 12-DOF joint angles (degrees).
+
+    DOF layout (12 total):
+      Thumb  (3): opposition, MCP flexion, IP flexion
+      Index  (3): abduction, MCP flexion, PIP flexion
+      Middle (2): MCP flexion, PIP flexion
+      Ring   (2): MCP flexion, PIP flexion
+      Little (2): MCP flexion, PIP flexion
+    """
+    dof: dict[str, float] = {}
+
+    # --- THUMB ---
+    palm_normal = np.cross(landmarks[5] - landmarks[0], landmarks[17] - landmarks[0])
+    thumb_cmc_mcp = landmarks[2] - landmarks[1]
+    # Opposition: 0 = in-plane (neutral), increases as thumb curls into palm
+    dof['thumb_j0'] = float(np.clip(get_angle(thumb_cmc_mcp, palm_normal) - 90, 0, 90))
+    dof['thumb_j1'] = float(np.clip(get_angle(landmarks[2] - landmarks[1], landmarks[3] - landmarks[2]), -60, 90))
+    dof['thumb_j2'] = float(np.clip(get_angle(landmarks[3] - landmarks[2], landmarks[4] - landmarks[3]), 0, 90))
+
+    # --- INDEX ---
+    dof['index_j0'] = float(np.clip(
+        get_angle(landmarks[5] - landmarks[0], landmarks[9] - landmarks[0]) - 15, -15, 15))
+    dof['index_j1'] = float(np.clip(
+        get_angle(landmarks[5] - landmarks[0], landmarks[6] - landmarks[5]), 0, 110))
+    dof['index_j2'] = float(np.clip(
+        get_angle(landmarks[6] - landmarks[5], landmarks[7] - landmarks[6]), 0, 110))
+
+    # --- MIDDLE, RING, LITTLE (2 DOF each) ---
+    for name, idx in [('middle', [9, 10, 11, 12]),
+                       ('ring',   [13, 14, 15, 16]),
+                       ('little', [17, 18, 19, 20])]:
+        dof[f'{name}_j0'] = float(np.clip(
+            get_angle(landmarks[idx[0]] - landmarks[0], landmarks[idx[1]] - landmarks[idx[0]]), 0, 110))
+        dof[f'{name}_j1'] = float(np.clip(
+            get_angle(landmarks[idx[1]] - landmarks[idx[0]], landmarks[idx[2]] - landmarks[idx[1]]), 0, 110))
+
+    return dof
+
+
 def compute_bone_lengths(pts: np.ndarray) -> np.ndarray:
     """Return Euclidean length of each bone in HAND_CONNECTIONS order."""
     return np.array([
