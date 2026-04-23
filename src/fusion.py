@@ -73,7 +73,7 @@ class HandFusion:
 
         if not visible:
             if self._ekf.initialised:
-                self._ekf.predict()
+                self._ekf.freeze()
                 return self._to_world(self._ekf.positions)
             return None
 

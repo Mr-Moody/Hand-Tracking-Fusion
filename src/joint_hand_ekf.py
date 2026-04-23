@@ -49,6 +49,10 @@ class JointHandEKF:
         self.x = self.F @ self.x
         self.P = self.F @ self.P @ self.F.T + self.Q
 
+    def freeze(self):
+        """Hold positions and zero velocities — called when no hand is visible."""
+        self.x.reshape(self.N, 6)[:, 3:] = 0
+
     def update(self, pts3d: np.ndarray, visible_mask: np.ndarray,
                depth_noise_scale: float = 1.0):
         """Update with a partial observation.
