@@ -221,6 +221,4 @@ def triangulate_landmarks(
     pts3d -= pts3d[0]   # wrist-centre (landmark 0)
     pts3d[:, 0] *= -1   # negate x to undo horizontal flip (match world-landmark convention)
 
-    pixel_scale_pts = pts3d * 4000 
-    
-    return pixel_scale_pts
+    return pts3d

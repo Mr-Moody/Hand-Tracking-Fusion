@@ -161,12 +161,12 @@ def reconstruct_12dof_hand(landmarks: np.ndarray) -> np.ndarray:
         dir1 = _rotate(
             base_dir,
             _bend_axis(base_dir, palm_z),
-            joint_angles[f"{name}_joint_0" if name != "index" else "index_joint_1"],
+            -joint_angles[f"{name}_joint_0" if name != "index" else "index_joint_1"],
         )
         dir2 = _rotate(
             dir1,
             _bend_axis(dir1, palm_z),
-            joint_angles[f"{name}_joint_1" if name != "index" else "index_joint_2"],
+            -joint_angles[f"{name}_joint_1" if name != "index" else "index_joint_2"],
         )
 
         recon[XHAND1_NODE_INDEX[base_key]] = base
@@ -181,8 +181,8 @@ def reconstruct_12dof_hand(landmarks: np.ndarray) -> np.ndarray:
     thumb_dir = _normalize(pts_palm[2] - pts_palm[1])
     thumb_out_axis = _bend_axis(thumb_dir, palm_z)
     thumb_dir = _rotate(thumb_dir, thumb_out_axis, -joint_angles["thumb_joint_0"])
-    thumb_dir1 = _rotate(thumb_dir, _bend_axis(thumb_dir, palm_z), joint_angles["thumb_joint_1"])
-    thumb_dir2 = _rotate(thumb_dir1, _bend_axis(thumb_dir1, palm_z), joint_angles["thumb_joint_2"])
+    thumb_dir1 = _rotate(thumb_dir, _bend_axis(thumb_dir, palm_z), -joint_angles["thumb_joint_1"])
+    thumb_dir2 = _rotate(thumb_dir1, _bend_axis(thumb_dir1, palm_z), -joint_angles["thumb_joint_2"])
 
     recon[XHAND1_NODE_INDEX["thumb_base"]] = thumb_base
     recon[XHAND1_NODE_INDEX["thumb_mid"]] = thumb_base + thumb_lengths[0] * _normalize(thumb_dir1)

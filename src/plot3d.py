@@ -21,7 +21,7 @@ _CONVERTED_BONE_COLOR = "#fb8500"
 
 class Hand3DPlot:
     def __init__(self, axis_limit: float = 0.12):
-        self._lim = axis_limit
+        self._min_lim = axis_limit
         plt.ion()
         self._fig = plt.figure("Fused 3D Hand", figsize=(10, 5))
         self._fig.patch.set_facecolor(_BG)
@@ -51,7 +51,7 @@ class Hand3DPlot:
         )
 
     def _configure_axes(self, ax, title: str) -> None:
-        lim = self._lim
+        lim = self._min_lim
         ax.set_xlim(-lim, lim)
         ax.set_ylim(-lim, lim)
         ax.set_zlim(-lim, lim)
@@ -64,6 +64,18 @@ class Hand3DPlot:
             pane.fill = False
             pane.set_edgecolor("#333355")
         ax.grid(True, color="#222244", linewidth=0.5)
+
+    def _frame_points(self, ax, pts3d: np.ndarray) -> None:
+        if pts3d.size == 0:
+            return
+
+        centre = pts3d[0]
+        span = np.ptp(pts3d, axis=0)
+        lim = max(self._min_lim, float(np.nanmax(span)) * 0.6)
+
+        ax.set_xlim(centre[0] - lim, centre[0] + lim)
+        ax.set_ylim(centre[1] - lim, centre[1] + lim)
+        ax.set_zlim(centre[2] - lim, centre[2] + lim)
 
     def update(self, pts3d: np.ndarray | None) -> None:
         if pts3d is not None:
@@ -80,6 +92,8 @@ class Hand3DPlot:
 
             self._joints._offsets3d = (xs, ys, zs)
             self._converted_joints._offsets3d = (cxs, cys, czs)
+            self._frame_points(self._ax, pts3d)
+            self._frame_points(self._ax_converted, converted)
         else:
             for line in self._bone_lines:
                 line.set_data([], [])

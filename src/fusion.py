@@ -92,12 +92,10 @@ class HandFusion:
         R_list = [compute_palm_frame(pts) for pts in lm3d_list]
         R_current = average_rotations(R_list) if len(R_list) > 1 else R_list[0]
 
-        # Transform observations into the palm frame
-        palm_obs = [to_palm_frame(pts, R_current) for pts in lm3d_list]
-
         # Initialise EKF on first detection
         if not self._ekf.initialised:
             self._R_palm = R_current.copy()
+            palm_obs = [to_palm_frame(pts, self._R_palm) for pts in lm3d_list]
             self._ekf.init(palm_obs[0])
             self._bone_lengths = compute_bone_lengths(palm_obs[0])
             return self._to_world(self._ekf.positions)
@@ -109,6 +107,7 @@ class HandFusion:
         angle = rotation_angle(self._R_palm, R_current)
         if angle > np.pi / 2:
             self._R_palm = R_current.copy()
+            palm_obs = [to_palm_frame(pts, self._R_palm) for pts in lm3d_list]
             self._ekf.init(palm_obs[0])
             if self._bone_lengths is None:
                 self._bone_lengths = compute_bone_lengths(palm_obs[0])
@@ -116,8 +115,13 @@ class HandFusion:
 
         # Adaptive rotation smoothing: track fast rotations more aggressively
         # so the palm frame doesn't lag behind a quickly flipping hand.
+        # Update _R_palm BEFORE computing palm_obs so the EKF always operates
+        # in the same smoothed frame that _to_world uses.
         adaptive_alpha = min(0.85, 0.15 + angle / (np.pi / 4) * 0.15)
         self._R_palm = smooth_rotation(self._R_palm, R_current, alpha=adaptive_alpha)
+
+        # Transform observations into the smoothed palm frame
+        palm_obs = [to_palm_frame(pts, self._R_palm) for pts in lm3d_list]
 
         self._ekf.predict()
         for pts_palm, mask in zip(palm_obs, mask_list):
