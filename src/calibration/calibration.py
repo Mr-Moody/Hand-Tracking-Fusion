@@ -7,13 +7,17 @@ Typical workflow:
 """
 
 import json
+import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-BOARD_SIZE = (7, 7)   # interior corner count (columns, rows)
-SQUARE_M   = 0.050    # checkerboard square side in metres (25 mm)
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from camera import CameraSource
+
+BOARD_SIZE = (13, 8)   # interior corner count (columns, rows)
+SQUARE_M   = 0.020    # checkerboard square side in metres (25 mm)
 
 
 # ---------------------------------------------------------------------------
@@ -41,20 +45,17 @@ def run_stereo_calibration(cam0_idx: int, cam1_idx: int,
     Show a checkerboard (BOARD_SIZE interior corners, SQUARE_M metre squares)
     to both cameras.  Press SPACE to capture a pair, Q to finish early.
     """
-    cap0 = cv2.VideoCapture(cam0_idx)
-    cap1 = cv2.VideoCapture(cam1_idx)
+    cap0 = CameraSource(cam0_idx)
+    cap1 = CameraSource(cam1_idx)
 
-    if not cap0.isOpened() or not cap1.isOpened():
+    print("Waiting for cameras to produce frames...")
+    if not cap0.wait_for_first_frame() or not cap1.wait_for_first_frame():
         cap0.release()
         cap1.release()
         raise RuntimeError(
-            f"Could not open calibration cameras cam0={cam0_idx}, cam1={cam1_idx}."
+            "Camera(s) did not produce frames within timeout. "
+            "Check indices, permissions, or if another app is using the devices."
         )
-
-    # Warm up camera streams to avoid initial black/empty frames.
-    for _ in range(20):
-        cap0.read()
-        cap1.read()
 
     obj_pt = _object_points()
     obj_pts: list = []
@@ -71,14 +72,14 @@ def run_stereo_calibration(cam0_idx: int, cam1_idx: int,
 
     read_failures = 0
     while True:
-        ok0, f0 = cap0.read()
-        ok1, f1 = cap1.read()
-        if not ok0 or not ok1:
+        f0, _ = cap0.read()
+        f1, _ = cap1.read()
+        if f0 is None or f1 is None:
             read_failures += 1
             if read_failures == 1 or read_failures % 30 == 0:
                 print(
-                    f"Read failure during calibration (cam0_ok={ok0}, cam1_ok={ok1}). "
-                    "Retrying..."
+                    f"Read failure during calibration (cam0={'ok' if f0 is not None else 'fail'}, "
+                    f"cam1={'ok' if f1 is not None else 'fail'}). Retrying..."
                 )
             if read_failures > 120:
                 raise RuntimeError(
@@ -88,10 +89,7 @@ def run_stereo_calibration(cam0_idx: int, cam1_idx: int,
             continue
         read_failures = 0
 
-        # Mirror to match CameraSource so calibration matrices are consistent
-        # with the flipped frames used during hand tracking.
-        f0 = cv2.flip(f0, 1)
-        f1 = cv2.flip(f1, 1)
+        # CameraSource already flips frames; no additional mirroring needed.
 
         g0 = cv2.cvtColor(f0, cv2.COLOR_BGR2GRAY)
         g1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
