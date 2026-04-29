@@ -45,9 +45,14 @@ class CameraSource():
         return False
 
     def read(self) -> tuple[np.ndarray | None, int]:
-        """Returns the most recently captured (frame, timestamp_ms)."""
+        """Returns the most recently captured frame and the current time in ms.
+
+        Timestamp reflects the time of this call, not the capture time, so
+        repeated reads of the same frame still produce strictly increasing
+        timestamps as required by MediaPipe's detect_for_video.
+        """
         with self._lock:
-            return self._latest_frame, self._latest_ts
+            return self._latest_frame, int(time.monotonic() * 1000)
 
     def release(self):
         self._running = False
