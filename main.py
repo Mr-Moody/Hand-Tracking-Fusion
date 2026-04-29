@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from camera import CameraSource
 from fusion import HandFusion
 from hand_detector import HandDetector
+from hand_filter import HandFilter
 from plot3d import Hand3DPlot
 from visualiser import HandVisualiser
 
@@ -82,6 +83,7 @@ def main():
     det1 = HandDetector(args.model, fps=args.fps) if cam1 is not None else None
 
     fusion = HandFusion(fps=args.fps, calibration=calibration)
+    hand_filter = HandFilter(max_hand_distance=0.3, memory_frames=30)
     vis = HandVisualiser()
     plot3d = Hand3DPlot()
 
@@ -97,33 +99,50 @@ def main():
                 print("Camera 0 read failed.")
                 break
 
-            detection0 = det0.detect(frame0, ts0)
+            # Detect all hands in camera 0
+            detections0 = det0.detect_all(frame0, ts0)
 
-            detection1 = None
+            # Detect all hands in camera 1 (if available)
+            detections1 = []
             frame1 = None
             if cam1 is not None:
                 frame1, ts1 = cam1.read()
                 if frame1 is not None:
-                    detection1 = det1.detect(frame1, ts1)
+                    detections1 = det1.detect_all(frame1, ts1)
 
-            fused_pts = fusion.update([detection0, detection1] if cam1 else [detection0])
+            # Filter to select the best hand across all cameras
+            filtered_detection = hand_filter.filter_detections_from_all_cameras(
+                [detections0, detections1] if cam1 else [detections0]
+            )
 
-            if detection0 is not None:
-                vis.draw_detection(frame0, detection0)
-                vis.draw_bounding_box(frame0, detection0)
+            # Fuse the filtered detection (convert to expected format)
+            fused_detections = [filtered_detection, None]
+            if cam1 is not None and filtered_detection is not None:
+                # For fusion: try to use stereo if available
+                # Pass only the filtered detection from the first camera
+                fused_detections = [filtered_detection, None]
+            
+            fused_pts = fusion.update(fused_detections if cam1 else [filtered_detection])
 
-            hud = [f"Cam0: {'detected' if detection0 else 'no hand'}"]
+            if filtered_detection is not None:
+                vis.draw_detection(frame0, filtered_detection)
+                vis.draw_bounding_box(frame0, filtered_detection)
+
+            hud = [f"Cam0: {len(detections0)} hand(s), tracking: {'yes' if filtered_detection else 'no'}"]
             if cam1 is not None:
-                hud.append(f"Cam1: {'detected' if detection1 else 'no hand'}")
+                hud.append(f"Cam1: {len(detections1)} hand(s)")
+            if hand_filter.tracked_hand_age is not None:
+                hud.append(f"Hand age: {hand_filter.tracked_hand_age} frames")
             if fused_pts is not None:
                 w = fused_pts[0]
                 hud.append(f"Wrist 3D: ({w[0]:.3f}, {w[1]:.3f}, {w[2]:.3f}) m")
             vis.draw_hud(frame0, hud)
 
             if args.show_both and frame1 is not None:
-                if detection1 is not None:
-                    vis.draw_detection(frame1, detection1)
-                    vis.draw_bounding_box(frame1, detection1)
+                if detections1:
+                    # Show first detection from camera 1
+                    vis.draw_detection(frame1, detections1[0])
+                    vis.draw_bounding_box(frame1, detections1[0])
                 h0 = frame0.shape[0]
                 h1, w1 = frame1.shape[:2]
                 if h0 != h1:
